@@ -1,0 +1,19 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# Friendly route for the Claude analysis proxy.
+[[redirects]]
+  from = "/api/analyze"
+  to = "/.netlify/functions/analyze"
+  status = 200
+
+# Single-page-app fallback so client routing works.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

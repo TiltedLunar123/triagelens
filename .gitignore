@@ -1,0 +1,20 @@
+node_modules
+dist
+dist-ssr
+coverage
+
+# Local env files (never commit secrets)
+.env
+.env.local
+.env.*.local
+*.local
+
+# Netlify
+.netlify
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.log
