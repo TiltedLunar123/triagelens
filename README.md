@@ -96,6 +96,8 @@ Paste a single object or an array of records. Windows and Sysmon samples follow 
 | SSH brute-force attempt | High | T1110 |
 | Successful login after brute-force activity | Critical | T1110, T1078 |
 
+The two SSH rules are time-bounded: five or more failures from one address inside a ten minute window, and for the critical rule, a successful login that lands inside that same window *after* the failures. Order and spacing both matter, so an unrelated login earlier in the file will not be reported as a compromise. Logs whose timestamps cannot be read fall back to a plain count, and the evidence line drops the window wording so it does not claim more than it knows.
+
 Rules live in [`src/lib/detections/rules.ts`](src/lib/detections/rules.ts) as plain, unit-tested functions. Adding a rule is a small, self-contained change.
 
 ## Project structure

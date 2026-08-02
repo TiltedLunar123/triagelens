@@ -22,6 +22,9 @@ const TEMP_PATH = /\\(Temp|AppData\\Local\\Temp|Downloads)\\/i
 
 /** Failed logons from one source address before it counts as brute force. */
 const BRUTE_FORCE_THRESHOLD = 5
+/** How close together those failures have to be. */
+const BRUTE_FORCE_WINDOW_SECONDS = 10 * 60
+const WINDOW_LABEL = '10 minutes'
 
 export const RULES: DetectionRule[] = [
   {
@@ -119,46 +122,51 @@ export const RULES: DetectionRule[] = [
     id: 'ssh-brute-force',
     title: 'SSH brute-force attempt',
     severity: 'high',
-    description:
-      'A single source address produced many failed SSH logons in a short window, consistent with password guessing or credential stuffing.',
+    description: `A single source address produced ${BRUTE_FORCE_THRESHOLD} or more failed SSH logons inside ${WINDOW_LABEL}, consistent with password guessing or credential stuffing.`,
     techniques: techniques('T1110'),
     recommendation:
       'Block the source IP, confirm no account was compromised, and enforce key-based authentication and rate limiting.',
     detect: (events) => {
-      const failsByIp = countFailuresByIp(events)
-      return Object.entries(failsByIp)
-        .filter(([, count]) => count >= BRUTE_FORCE_THRESHOLD)
-        .map(([ip, count]) => `${count} failed SSH logons from ${ip}`)
+      const evidence: string[] = []
+      for (const [ip, times] of Object.entries(failureTimesByIp(events))) {
+        const burst = peakBurst(times)
+        if (burst.count < BRUTE_FORCE_THRESHOLD) continue
+        evidence.push(
+          burst.windowed
+            ? `${burst.count} failed SSH logons from ${ip} within ${WINDOW_LABEL}`
+            : `${burst.count} failed SSH logons from ${ip}`,
+        )
+      }
+      return evidence
     },
   },
   {
     id: 'successful-auth-after-brute-force',
     title: 'Successful login after brute-force activity',
     severity: 'critical',
-    description:
-      'An IP that generated many failed SSH logons then authenticated successfully. This pattern indicates a likely account compromise.',
+    description: `An IP authenticated successfully within ${WINDOW_LABEL} of producing ${BRUTE_FORCE_THRESHOLD} or more failed SSH logons. This pattern indicates a likely account compromise.`,
     techniques: techniques('T1110', 'T1078'),
     recommendation:
       'Treat the account as compromised: force a password reset, terminate active sessions, and hunt for post-access activity from this host.',
     detect: (events) => {
       const evidence: string[] = []
-      // Count failures as we walk the log so a success only sees the failures
+      // Collect failures as we walk the log so a success only sees the ones
       // that actually preceded it. Counting the whole file up front flags a
       // legitimate login that happened before an attacker ever showed up.
-      const failuresSoFar: Record<string, number> = {}
+      const failuresSoFar: Record<string, (number | undefined)[]> = {}
       for (const e of events) {
         if (!e.sourceIp) continue
         if (e.eventId === 'auth-failure') {
-          failuresSoFar[e.sourceIp] = (failuresSoFar[e.sourceIp] ?? 0) + 1
+          ;(failuresSoFar[e.sourceIp] ??= []).push(eventSeconds(e))
           continue
         }
         if (e.eventId !== 'auth-success') continue
-        const priorFailures = failuresSoFar[e.sourceIp] ?? 0
-        if (priorFailures >= BRUTE_FORCE_THRESHOLD) {
-          evidence.push(
-            `Successful login for "${e.user}" from ${e.sourceIp} after ${priorFailures} failures`,
-          )
-        }
+        const prior = failuresSoFar[e.sourceIp] ?? []
+        const runUp = failuresLeadingUpTo(prior, eventSeconds(e))
+        if (runUp < BRUTE_FORCE_THRESHOLD) continue
+        evidence.push(
+          `Successful login for "${e.user}" from ${e.sourceIp} after ${runUp} failures`,
+        )
       }
       return evidence
     },
@@ -197,12 +205,96 @@ function imagePath(event: NormalizedEvent): string | undefined {
   return data.Image ?? data.NewProcessName ?? event.process
 }
 
-function countFailuresByIp(events: NormalizedEvent[]): Record<string, number> {
-  const counts: Record<string, number> = {}
+function failureTimesByIp(
+  events: NormalizedEvent[],
+): Record<string, (number | undefined)[]> {
+  const byIp: Record<string, (number | undefined)[]> = {}
   for (const e of events) {
     if (e.eventId === 'auth-failure' && e.sourceIp) {
-      counts[e.sourceIp] = (counts[e.sourceIp] ?? 0) + 1
+      ;(byIp[e.sourceIp] ??= []).push(eventSeconds(e))
     }
   }
-  return counts
+  return byIp
+}
+
+const SYSLOG_TIME = /^([A-Za-z]{3})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})/
+const MONTHS = [
+  'jan', 'feb', 'mar', 'apr', 'may', 'jun',
+  'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+]
+
+/**
+ * An event's time as whole seconds, or undefined when there is nothing usable
+ * to read. Syslog lines carry no year, so those resolve against a fixed
+ * reference year; that only ever gets compared against other events from the
+ * same file, so the missing year does not matter. A log that crosses from
+ * December into January is the one case this gets wrong, and the cost there is
+ * a missed grouping rather than a false alarm.
+ */
+function eventSeconds(event: NormalizedEvent): number | undefined {
+  const raw = event.timestamp?.trim()
+  if (!raw) return undefined
+
+  const syslog = SYSLOG_TIME.exec(raw)
+  if (syslog) {
+    const month = MONTHS.indexOf(syslog[1].toLowerCase())
+    if (month === -1) return undefined
+    return (
+      Date.UTC(
+        2000,
+        month,
+        Number(syslog[2]),
+        Number(syslog[3]),
+        Number(syslog[4]),
+        Number(syslog[5]),
+      ) / 1000
+    )
+  }
+
+  const parsed = Date.parse(raw)
+  return Number.isNaN(parsed) ? undefined : Math.floor(parsed / 1000)
+}
+
+/**
+ * The most failures from one address that land inside a single window, plus
+ * whether the window was actually applied. When any of the times cannot be
+ * read there is no way to measure the spread, so the whole run counts and the
+ * caller is told not to claim a window in its evidence.
+ */
+function peakBurst(times: (number | undefined)[]): {
+  count: number
+  windowed: boolean
+} {
+  if (times.some((t) => t === undefined)) {
+    return { count: times.length, windowed: false }
+  }
+  const sorted = (times as number[]).slice().sort((a, b) => a - b)
+  let best = 0
+  let start = 0
+  for (let end = 0; end < sorted.length; end++) {
+    while (sorted[end] - sorted[start] > BRUTE_FORCE_WINDOW_SECONDS) start++
+    best = Math.max(best, end - start + 1)
+  }
+  return { count: best, windowed: true }
+}
+
+/**
+ * How many of the failures that preceded a login fall inside the window that
+ * ends at it. Falls back to the plain count when either side has no readable
+ * time.
+ */
+function failuresLeadingUpTo(
+  priorFailures: (number | undefined)[],
+  loginAt: number | undefined,
+): number {
+  if (loginAt === undefined) return priorFailures.length
+  let count = 0
+  for (const at of priorFailures) {
+    if (at === undefined) {
+      count++
+      continue
+    }
+    if (loginAt - at <= BRUTE_FORCE_WINDOW_SECONDS) count++
+  }
+  return count
 }

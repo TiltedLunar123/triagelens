@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Finding } from '../../types'
+import type { Finding, NormalizedEvent } from '../../types'
 import { SAMPLES } from '../../data/samples'
 import { parseLogs } from '../parsers'
 import { runDetections } from './rules'
@@ -121,5 +121,79 @@ describe('successful-auth-after-brute-force', () => {
     ])
 
     expect(ids(findings)).not.toContain('successful-auth-after-brute-force')
+  })
+
+  it('ignores a login hours after the guessing stopped', () => {
+    const findings = detect([
+      fail('09:00:01', '10.0.0.5'),
+      fail('09:00:02', '10.0.0.5'),
+      fail('09:00:03', '10.0.0.5'),
+      fail('09:00:04', '10.0.0.5'),
+      fail('09:00:05', '10.0.0.5'),
+      ok('12:00:00', '10.0.0.5'),
+    ])
+
+    expect(ids(findings)).toContain('ssh-brute-force')
+    expect(ids(findings)).not.toContain('successful-auth-after-brute-force')
+  })
+})
+
+// --- brute-force window ----------------------------------------------------
+
+const bruteForce = (lines: string[]) =>
+  detect(lines).find((f) => f.id === 'ssh-brute-force')
+
+describe('ssh-brute-force window', () => {
+  it('does not fire on failures spread across the day', () => {
+    expect(
+      bruteForce([
+        fail('01:00:00', '10.0.0.5'),
+        fail('05:00:00', '10.0.0.5'),
+        fail('09:00:00', '10.0.0.5'),
+        fail('14:00:00', '10.0.0.5'),
+        fail('20:00:00', '10.0.0.5'),
+      ]),
+    ).toBeUndefined()
+  })
+
+  it('fires and says so when the failures are bunched together', () => {
+    expect(
+      bruteForce([
+        fail('09:00:01', '10.0.0.5'),
+        fail('09:02:00', '10.0.0.5'),
+        fail('09:04:00', '10.0.0.5'),
+        fail('09:06:00', '10.0.0.5'),
+        fail('09:08:00', '10.0.0.5'),
+      ])?.evidence,
+    ).toEqual(['5 failed SSH logons from 10.0.0.5 within 10 minutes'])
+  })
+
+  it('counts the burst, not the stragglers around it', () => {
+    // Two lone attempts in the morning, then a real run at 22:00.
+    expect(
+      bruteForce([
+        fail('06:00:00', '10.0.0.5'),
+        fail('13:00:00', '10.0.0.5'),
+        fail('22:00:01', '10.0.0.5'),
+        fail('22:00:02', '10.0.0.5'),
+        fail('22:00:03', '10.0.0.5'),
+        fail('22:00:04', '10.0.0.5'),
+        fail('22:00:05', '10.0.0.5'),
+      ])?.evidence,
+    ).toEqual(['5 failed SSH logons from 10.0.0.5 within 10 minutes'])
+  })
+
+  it('falls back to a plain count when the times cannot be read', () => {
+    const untimed: NormalizedEvent[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `f${i}`,
+      source: 'json',
+      eventId: 'auth-failure',
+      sourceIp: '10.0.0.5',
+      message: 'failed login',
+      raw: {},
+    }))
+
+    const finding = runDetections(untimed).find((f) => f.id === 'ssh-brute-force')
+    expect(finding?.evidence).toEqual(['5 failed SSH logons from 10.0.0.5'])
   })
 })
