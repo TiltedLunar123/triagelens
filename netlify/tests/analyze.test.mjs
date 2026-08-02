@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import handler, { buildUserPrompt, parseJsonLoose } from './analyze.mjs'
+import handler, { buildUserPrompt, parseJsonLoose } from '../functions/analyze.mjs'
 
 /** A Request-alike with just the two members the handler touches. */
 function post(body) {
