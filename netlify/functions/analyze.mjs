@@ -75,14 +75,27 @@ export default async (req) => {
     )
   }
 
-  const data = await upstream.json()
+  // A 200 with a body that isn't JSON is rare but it does happen, usually when
+  // something in front of the API answers instead. Without this guard the
+  // throw escapes the handler and the caller gets an opaque 500.
+  let data
+  try {
+    data = await upstream.json()
+  } catch {
+    return json({ error: 'The Anthropic API returned a body that was not JSON.' }, 502)
+  }
+
   const text = data?.content?.[0]?.text ?? ''
   const parsed = parseJsonLoose(text)
 
-  return json(parsed ?? { summary: text }, 200)
+  // parseJsonLoose will happily hand back an array, a number, or false, none of
+  // which the client can read. Only an object is worth passing through.
+  const usable = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+
+  return json(usable ? parsed : { summary: text }, 200)
 }
 
-function buildUserPrompt(body) {
+export function buildUserPrompt(body) {
   const findings = Array.isArray(body?.findings) ? body.findings : []
   const events = Array.isArray(body?.events) ? body.events : []
   const payload = {
@@ -101,7 +114,7 @@ function buildUserPrompt(body) {
   return `Analyze these detections and events:\n\n${JSON.stringify(payload, null, 2)}`
 }
 
-function parseJsonLoose(text) {
+export function parseJsonLoose(text) {
   const trimmed = String(text).trim()
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
   const candidate = fenced ? fenced[1] : trimmed
