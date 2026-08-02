@@ -20,6 +20,9 @@ const OFFICE_PARENTS = /winword|excel|powerpnt|outlook|onenote|mspub/i
 const LOLBINS = /\b(mshta|certutil|regsvr32|rundll32|wmic|bitsadmin|cscript|wscript)\.exe\b/i
 const TEMP_PATH = /\\(Temp|AppData\\Local\\Temp|Downloads)\\/i
 
+/** Failed logons from one source address before it counts as brute force. */
+const BRUTE_FORCE_THRESHOLD = 5
+
 export const RULES: DetectionRule[] = [
   {
     id: 'encoded-powershell',
@@ -124,7 +127,7 @@ export const RULES: DetectionRule[] = [
     detect: (events) => {
       const failsByIp = countFailuresByIp(events)
       return Object.entries(failsByIp)
-        .filter(([, count]) => count >= 5)
+        .filter(([, count]) => count >= BRUTE_FORCE_THRESHOLD)
         .map(([ip, count]) => `${count} failed SSH logons from ${ip}`)
     },
   },
@@ -138,16 +141,22 @@ export const RULES: DetectionRule[] = [
     recommendation:
       'Treat the account as compromised: force a password reset, terminate active sessions, and hunt for post-access activity from this host.',
     detect: (events) => {
-      const failsByIp = countFailuresByIp(events)
       const evidence: string[] = []
+      // Count failures as we walk the log so a success only sees the failures
+      // that actually preceded it. Counting the whole file up front flags a
+      // legitimate login that happened before an attacker ever showed up.
+      const failuresSoFar: Record<string, number> = {}
       for (const e of events) {
-        if (
-          e.eventId === 'auth-success' &&
-          e.sourceIp &&
-          (failsByIp[e.sourceIp] ?? 0) >= 5
-        ) {
+        if (!e.sourceIp) continue
+        if (e.eventId === 'auth-failure') {
+          failuresSoFar[e.sourceIp] = (failuresSoFar[e.sourceIp] ?? 0) + 1
+          continue
+        }
+        if (e.eventId !== 'auth-success') continue
+        const priorFailures = failuresSoFar[e.sourceIp] ?? 0
+        if (priorFailures >= BRUTE_FORCE_THRESHOLD) {
           evidence.push(
-            `Successful login for "${e.user}" from ${e.sourceIp} after ${failsByIp[e.sourceIp]} failures`,
+            `Successful login for "${e.user}" from ${e.sourceIp} after ${priorFailures} failures`,
           )
         }
       }
