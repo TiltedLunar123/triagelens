@@ -1,6 +1,6 @@
 # TriageLens
 
-> AI-assisted SOC alert and log triage. Paste raw security logs, get a parsed, scored, MITRE ATT&CK-mapped triage report with analyst-style recommendations.
+> AI-helped SOC alert and log triage. Paste raw security logs, get a parsed, scored, MITRE ATT&CK-mapped triage report with analyst-style recommendations.
 
 TriageLens is a real log-analysis engine with an AI layer on top, not a chatbot wrapped around a prompt. The engine does the detection work in plain, testable code: it parses logs, maps activity to MITRE ATT&CK, and scores risk. The AI layer turns those structured findings into a readable summary, per-finding notes, and prioritized next steps, the way a Tier 1 analyst would write up an alert.
 
@@ -21,16 +21,7 @@ Tier 1 SOC work is mostly triage: read an alert, figure out what happened, decid
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Raw logs] --> B[Format detection + parsers]
-    B --> C[Normalized events]
-    C --> D[Detection rules]
-    D --> E[Findings + MITRE mapping]
-    E --> F[Risk scoring]
-    F --> G[AI provider: demo / Ollama / Claude]
-    G --> H[Triage report]
-```
+![Six stages left to right. Raw logs from 4688, Sysmon, auth.log and JSON go to Parse, which does format detection and normalises events. Then Detect, which does rule matches and MITRE ATT&CK mapping. Then Score, a composite risk from 0 to 100. Then Write up, using the demo, Ollama or Claude provider. Then the triage report, with a summary, notes and next steps. A note underneath reads: the structured result is identical whichever provider you pick, only the prose changes.](docs/pipeline.png)
 
 Parsing, detection, and scoring are deterministic and provider-independent. Only the final narrative comes from the selected AI provider, so the structured result is identical no matter which provider you pick.
 
@@ -128,7 +119,7 @@ npm test           # vitest run
 
 ## Roadmap
 
-- [ ] Native `.evtx` binary parsing (currently expects EVTX exported to JSON)
+- [ ] Native `.evtx` binary parsing (now expects EVTX exported to JSON)
 - [ ] More detection rules (scheduled tasks, service creation, DCSync, suspicious parent chains)
 - [ ] Sigma rule import so detections can be authored in a standard format
 - [ ] IOC extraction and enrichment (hashes, IPs, domains)
