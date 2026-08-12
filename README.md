@@ -1,6 +1,6 @@
 # TriageLens
 
-> AI-helped SOC alert and log triage. Paste raw security logs, get a parsed, scored, MITRE ATT&CK-mapped triage report with analyst-style recommendations.
+> AI-assisted SOC alert and log triage. Paste raw security logs, get a parsed, scored, MITRE ATT&CK-mapped triage report with analyst-style recommendations.
 
 TriageLens is a real log-analysis engine with an AI layer on top, not a chatbot wrapped around a prompt. The engine does the detection work in plain, testable code: it parses logs, maps activity to MITRE ATT&CK, and scores risk. The AI layer turns those structured findings into a readable summary, per-finding notes, and prioritized next steps, the way a Tier 1 analyst would write up an alert.
 
